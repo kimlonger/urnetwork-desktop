@@ -4,7 +4,7 @@
 
 ## 使用
 
-从仓库的「发布版本」下载 Windows x64 版 EXE，直接双击。已有访客身份和分流设置会继续使用。具体用法见[使用说明](README-Start.md)。
+从[发布页](https://github.com/kimlonger/urnetwork-desktop/releases/latest)下载 Windows x64 版 EXE，直接双击。已有访客身份和分流设置会继续使用。具体用法见[使用说明](README-Start.md)。
 
 ## 构建
 
@@ -15,6 +15,10 @@
 ```
 
 脚本校验固定版本的 SDK，生成图标资源，运行自动测试，并将单文件 EXE 输出到 `dist`。
+
+## 开源许可证
+
+本项目的原创代码、文档和应用图标采用 [MIT 许可证](LICENSE)，也适用于 v0.6.2 中发布的原创内容。随附的 SDK、依赖和规则数据各自沿用原有许可证。
 
 ## 第三方组件
 
