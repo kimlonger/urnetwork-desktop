@@ -1,0 +1,11 @@
+{
+  "default": "ur",
+  "rules": [
+    {"target": "+.deepseek.com", "action": "direct"}
+  ],
+  "profiles": {
+    "auto": {"port": 18790, "mode": "auto", "rules": []},
+    "direct": {"port": 18791, "mode": "direct", "rules": []},
+    "ur": {"port": 18792, "mode": "ur", "rules": []}
+  }
+}

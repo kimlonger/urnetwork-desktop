@@ -1,0 +1,8 @@
+*.exe
+*.log
+*.syso
+/dist/
+/session.dpapi
+/desktop-exit.json
+/builtin-rules.json
+/bypass.json
