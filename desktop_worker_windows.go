@@ -21,8 +21,9 @@ import (
 type workerEvent struct {
 	Kind    string
 	Value   string
-	Exit    *exitObservation `json:",omitempty"`
-	Traffic *trafficSample   `json:",omitempty"`
+	SDK     *sdkConnectionStatus `json:",omitempty"`
+	Exit    *exitObservation     `json:",omitempty"`
+	Traffic *trafficSample       `json:",omitempty"`
 }
 
 type exitObservation struct {
@@ -59,8 +60,67 @@ func sendWorkerEvent(event workerEvent) {
 	_ = json.NewEncoder(os.Stdout).Encode(event)
 }
 
-func readWorkerCommands(ctx context.Context, stop context.CancelFunc, lines *bufio.Scanner, connection *sdk, active *activePolicy, address string) {
+func runWorker(ctx context.Context, stop context.CancelFunc, lines *bufio.Scanner, connection *sdk, controller uintptr, active *activePolicy, address string, speedMode bool) {
 	defer stop()
+	commands := make(chan workerCommand)
+	go func() {
+		defer close(commands)
+		for lines.Scan() {
+			var command workerCommand
+			if json.Unmarshal(lines.Bytes(), &command) != nil {
+				continue
+			}
+			select {
+			case commands <- command:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	var lastStatus sdkConnectionStatus
+	publishStatus := func() {
+		if controller == 0 {
+			return
+		}
+		status := connection.connectionStatus(controller)
+		if shouldFallbackFromSpeed(speedMode, status) {
+			speedMode = false
+			if err := connection.useAutoProfile(); err != nil {
+				log.Print("速度模式切换自动模式失败。")
+				sendWorkerEvent(workerEvent{Kind: "speed-fallback-error"})
+			} else {
+				log.Print("速度优先节点连接失败，已切回自动模式。")
+				sendWorkerEvent(workerEvent{Kind: "speed-fallback"})
+			}
+		}
+		if status.State != lastStatus.State || status.connected() != lastStatus.connected() {
+			log.Printf("SDK 节点状态：%s，已连接节点 %d。", status.State, status.Providers)
+			sendWorkerEvent(workerEvent{Kind: "sdk-status", SDK: &status})
+		}
+		lastStatus = status
+	}
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	egressTicker := time.NewTicker(2 * time.Second)
+	defer egressTicker.Stop()
+
+	type probeResult struct {
+		ctx  context.Context
+		exit exitObservation
+		err  error
+	}
+	probeResults := make(chan probeResult)
+	var probeCtx context.Context
+	var cancelProbe context.CancelFunc
+	clearProbe := func() {
+		if cancelProbe != nil {
+			cancelProbe()
+			probeCtx, cancelProbe = nil, nil
+		}
+	}
+	defer clearProbe()
+
 	var restore func() error
 	defer func() {
 		if restore != nil {
@@ -69,16 +129,48 @@ func readWorkerCommands(ctx context.Context, stop context.CancelFunc, lines *buf
 			}
 		}
 	}()
-	for lines.Scan() {
+	publishStatus()
+	for {
 		var command workerCommand
-		if json.Unmarshal(lines.Bytes(), &command) != nil {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			publishStatus()
 			continue
+		case <-egressTicker.C:
+			if connection != nil {
+				connection.refreshEgress()
+			}
+			continue
+		case result := <-probeResults:
+			if result.ctx == probeCtx {
+				clearProbe()
+				if result.err != nil {
+					log.Printf("出口地址查询失败：%v", result.err)
+					sendWorkerEvent(workerEvent{Kind: "probe-error"})
+				} else {
+					log.Printf("出口检测地区：%s", result.exit.Country)
+					sendWorkerEvent(workerEvent{Kind: "probe", Exit: &result.exit})
+				}
+			}
+			continue
+		case next, ok := <-commands:
+			if !ok {
+				return
+			}
+			command = next
 		}
 		switch command.Kind {
 		case "stop":
 			return
 		case "system-on":
 			if restore == nil {
+				publishStatus()
+				if !lastStatus.connected() {
+					sendWorkerEvent(workerEvent{Kind: "system-wait"})
+					continue
+				}
 				var err error
 				restore, err = enableSystemProxy(address)
 				if err != nil {
@@ -107,25 +199,28 @@ func readWorkerCommands(ctx context.Context, stop context.CancelFunc, lines *buf
 				sendWorkerEvent(workerEvent{Kind: "location-error", Value: err.Error()})
 				continue
 			}
+			clearProbe()
+			lastStatus = sdkConnectionStatus{}
 			active.exitGeneration.Add(1)
 			active.closeTunnels(ur)
 			log.Printf("已请求切换代理出口，地区标识 %q。", command.ID)
 			sendWorkerEvent(workerEvent{Kind: "location", Value: command.ID})
+			publishStatus()
 		case "probe":
-			go func() {
-				if connection == nil {
-					sendWorkerEvent(workerEvent{Kind: "probe-error", Value: "URnetwork 代理尚未就绪"})
-					return
-				}
-				exit, err := probeExit(ctx, connection.dial)
-				if err != nil {
-					log.Printf("出口检测失败：%v", err)
-					sendWorkerEvent(workerEvent{Kind: "probe-error", Value: "出口检测失败，请稍后重试或查看日志"})
-					return
-				}
-				log.Printf("出口检测地区：%s", exit.Country)
-				sendWorkerEvent(workerEvent{Kind: "probe", Exit: &exit})
-			}()
+			if connection == nil {
+				sendWorkerEvent(workerEvent{Kind: "probe-error"})
+				continue
+			}
+			if probeCtx == nil {
+				probeCtx, cancelProbe = context.WithCancel(ctx)
+				go func(attempt context.Context) {
+					exit, err := probeExit(attempt, connection.dial)
+					select {
+					case probeResults <- probeResult{ctx: attempt, exit: exit, err: err}:
+					case <-attempt.Done():
+					}
+				}(probeCtx)
+			}
 		case "browser":
 			if err := launchBrowserAt(address); err != nil {
 				sendWorkerEvent(workerEvent{Kind: "error", Value: err.Error()})
@@ -203,12 +298,15 @@ type proxyWorker struct {
 	input io.WriteCloser
 }
 
-func startWorker(location string, post func(workerEvent)) (*proxyWorker, error) {
+func startWorker(location string, speedMode bool, post func(workerEvent)) (*proxyWorker, error) {
 	exe, err := os.Executable()
 	if err != nil {
 		return nil, err
 	}
 	args := []string{"-desktop-worker"}
+	if speedMode {
+		args = append(args, "-performance-speed")
+	}
 	if location != "" {
 		args = append(args, "-location-id", location)
 	}

@@ -1,6 +1,10 @@
-# URnetwork 桌面代理 0.6.2
+# URnetwork 桌面代理 0.6.6
 
-关闭旧版代理，双击 `URnetwork-Desktop-v0.6.2-Windows-x64.exe`。需要 Windows 10 或 11 x64。点击「启动代理」。首次会显示 URnetwork 的服务条款确认框，确认后自动为本机开通访客身份。勾选「使用系统代理」后，程序会在出口检测成功时接入系统代理。也可以点击「打开独立浏览器」。
+关闭旧版代理，双击 `URnetwork-Desktop-v0.6.6-Windows-x64.exe`。需要 Windows 10 或 11 x64。点击「启动代理」。首次会显示 URnetwork 的服务条款确认框，确认后自动为本机开通访客身份。勾选「使用系统代理」后，程序会在 URnetwork 节点连通时接入系统代理。出口地址和实际地区会在后台更新。也可以点击「打开独立浏览器」。
+
+「速度优先」使用单个速度型出口；首次运行时，如果本机 URnetwork 桌面版已选择相同模式，新版会默认勾选。停止代理后可取消勾选并切回自动模式。若 SDK 报告速度模式连接失败，程序会尝试回退到自动模式，并在窗口中提示。此设置不会更改桌面版账号或降低匿名中继设置，出口 IP 仍可能变化；速度与稳定性取决于节点，无法保证更快。
+
+如果 Windows 已启用 Clash、PAC 或自动代理设置，新版默认不勾选「使用系统代理」，避免启动时接管现有网络；需要切换时再由你勾选。只启动新版代理本身不会改变当前 Clash 的上游线路。
 
 每台电脑的访客身份相互独立，使用 URnetwork 的访客额度。设备凭证由 Windows 加密保存在 `%LOCALAPPDATA%\URnetwork-OneClick\session.dpapi`。新版本会继续使用该位置保存的访客身份。首次访问外网可能需要等待节点连接，启动窗口请保持打开。
 
@@ -14,4 +18,6 @@
 
 启动时根据电脑的物理内存，采用官方 Windows 客户端对应的 SDK 设备和进程预算，并记录到运行日志。创建设备时禁用流量共享、设备 RPC 和贡献中继，确认只使用代理后再启动。停止或退出时会恢复程序接入前的 Windows 系统代理。若另一个程序已改动代理设置，会保留新设置。
 
-本包为独立制作的试用版。SDK 来自 URnetwork `2026.10.27-1083160450`。相关源码见 [URnetwork 构建版本](https://github.com/urnetwork/build/tree/v2026.10.27-1083160450) 和 [SDK 仓库](https://github.com/urnetwork/sdk)，SDK 与底层连接库采用 MPL 2.0。软件和数据声明位于 `%LOCALAPPDATA%\URnetwork-OneClick\runtime\0.6.2`。国内规则库来自 [MetaCubeX](https://github.com/MetaCubeX/meta-rules-dat)。
+SDK 的中继发现缓存保存在 `%LOCALAPPDATA%\URnetwork-OneClick\sdk-storage`，供下次启动复用。程序启动时会为 SDK 分别选择 IPv4 和 IPv6 上联网卡，路由变化后自动更新。
+
+本包为独立制作的试用版。SDK 来自 URnetwork `2026.11.16-1100716180`。相关源码见 [URnetwork 构建版本](https://github.com/urnetwork/build/tree/v2026.11.16-1100716180) 和 [SDK 仓库](https://github.com/urnetwork/sdk)，SDK 与底层连接库采用 MPL 2.0。软件和数据声明位于 `%LOCALAPPDATA%\URnetwork-OneClick\runtime\0.6.6`。国内规则库来自 [MetaCubeX](https://github.com/MetaCubeX/meta-rules-dat)。

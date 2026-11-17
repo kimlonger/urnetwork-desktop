@@ -27,6 +27,7 @@ const (
 	proxyTypeDirect     = 1
 	proxyTypeManual     = 2
 	proxyTypeAutoConfig = 4
+	proxyTypeAutoDetect = 8
 )
 
 var (
@@ -54,6 +55,11 @@ type proxySettings struct {
 	Server string
 	Bypass string
 	PAC    string
+}
+
+// Avoid silently replacing Clash, a PAC file, or auto-detected proxy settings.
+func shouldEnableSystemProxyByDefault(settings proxySettings, err error) bool {
+	return err == nil && settings.Flags&(proxyTypeManual|proxyTypeAutoConfig|proxyTypeAutoDetect) == 0
 }
 
 func (s proxySettings) matches(active proxySettings) bool {

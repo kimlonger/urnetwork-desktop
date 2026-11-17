@@ -143,10 +143,10 @@ func desktopProc(hwnd uintptr, message uint32, w, l uintptr) uintptr {
 		case wmTimer:
 			d.updateLog(false)
 			recheckAfter := time.Minute
-			if !d.confirmedExit {
+			if !d.exitCurrent {
 				recheckAfter = 30 * time.Second
 			}
-			if d.ready && !d.switching && !d.lastExitProbe.IsZero() && time.Since(d.lastExitProbe) > recheckAfter {
+			if d.ready && d.sdkStatus.connected() && !d.switching && (d.lastExitProbe.IsZero() || time.Since(d.lastExitProbe) > recheckAfter) {
 				d.requestExit()
 			}
 			return 0

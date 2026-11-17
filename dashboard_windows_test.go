@@ -4,10 +4,31 @@ import (
 	"context"
 	"io"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestSDKInitializesPersistentNetworkSpace(t *testing.T) {
+	storage := t.TempDir()
+	for range 2 {
+		connection, err := loadSDK("URnetworkSdk.dll")
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = connection.init(storage)
+		connection.close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		state, err := os.ReadFile(filepath.Join(storage, ".network_spaces"))
+		if err != nil || !strings.Contains(string(state), "bringyour.com") {
+			t.Fatalf("SDK network space was not persisted: %v", err)
+		}
+	}
+}
 
 func TestDashboardTrafficCountsBothDirectionsBeforeClose(t *testing.T) {
 	var counters trafficCounters

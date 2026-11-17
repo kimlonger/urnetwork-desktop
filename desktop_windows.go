@@ -94,6 +94,7 @@ const (
 	idChosenExit
 	idReconnect
 	idOpenMatchedRule
+	idSpeedMode
 )
 
 const (
@@ -143,8 +144,8 @@ type desktop struct {
 	exit                                                              exitObservation
 	lastExitProbe                                                     time.Time
 	exitVerifiedAt                                                    time.Time
-	probeFailures                                                     int
-	confirmedExit                                                     bool
+	exitProbeFailed, exitCurrent                                      bool
+	sdkStatus                                                         sdkConnectionStatus
 	scopes                                                            []string
 	ruleSelection                                                     int
 	matchedRuleKey, matchedReason                                     string
@@ -152,6 +153,7 @@ type desktop struct {
 	countries                                                         []exitCountry
 	wanted                                                            exitCountry
 	refreshing, probing, switching                                    bool
+	speedMode                                                         bool
 	worker                                                            *proxyWorker
 	ready, stopping, closing, systemBusy, systemOn                    bool
 	errorShown                                                        bool
@@ -210,7 +212,8 @@ func runDesktop() error {
 		builtinPath: builtinPath, builtinEdits: builtinEdits, builtinLists: make(map[builtinGroup][]string),
 		geo: geo, rules: rules, ruleSelection: -1, logSize: -1,
 		controls: make(map[int]uintptr), controlIDs: make(map[uintptr]int), inbox: make(chan desktopEvent, 32),
-		wanted: readExitPreference(root),
+		wanted:    readExitPreference(root),
+		speedMode: initialSpeedPreference(root, os.Getenv("LOCALAPPDATA")),
 	}
 	return d.makeWindow()
 }
@@ -238,6 +241,7 @@ func (d *desktop) buildControls() error {
 		{idCheckExit, "BUTTON", "刷新出口", button, 0},
 		{idReconnect, "BUTTON", "重连当前地区", button, 0},
 		{idCountryStatus, "STATIC", "", 0, 0},
+		{idSpeedMode, "BUTTON", "速度优先（单出口，停止后可切换）", button | 3, 0},
 		{idRulesTab, "BUTTON", "分流规则", button, 0},
 		{idLogsTab, "BUTTON", "运行日志", button, 0},
 		{idHomeTab, "BUTTON", "连接概览", button, 0},
@@ -309,7 +313,7 @@ func (d *desktop) buildControls() error {
 	}
 	for _, c := range controls {
 		style := c.style
-		if c.kind == "BUTTON" && c.id != idSystem {
+		if c.kind == "BUTTON" && c.id != idSystem && c.id != idSpeedMode {
 			style |= 0x0b // BS_OWNERDRAW
 		}
 		if err := d.control(c.id, c.kind, c.text, style, c.extra); err != nil {
@@ -327,7 +331,12 @@ func (d *desktop) buildControls() error {
 	sendMessage.Call(d.controls[idIPInput], 0x1501, 1, uintptr(unsafe.Pointer(wide("IP 或网段，如 192.0.2.0/24"))))
 	send(d.controls[idWebInput], 0xc5, 2048, 0)
 	send(d.controls[idIPInput], 0xc5, 64, 0)
-	send(d.controls[idSystem], bmSet, 1, 0)
+	if settings, err := queryProxySettings(); shouldEnableSystemProxyByDefault(settings, err) {
+		send(d.controls[idSystem], bmSet, 1, 0)
+	}
+	if d.speedMode {
+		send(d.controls[idSpeedMode], bmSet, 1, 0)
+	}
 	d.initRules()
 	enable(d.controls[idOpenMatchedRule], false)
 	d.initBuiltins()
@@ -367,6 +376,7 @@ func (d *desktop) layout(width, height int) {
 	place(idRefresh, right-206, 230, 82, 35)
 	place(idCountryApply, right-114, 230, 93, 35)
 	place(idCountryStatus, x+21, 277, body-42, 24)
+	place(idSpeedMode, x+21, 298, body-42, 20)
 	place(idExitCaption, x+20, 340, body-166, 22)
 	place(idExitIP, x+20, 363, body-151, 32)
 	place(idChosenExit, x+20, 397, body-160, 21)
@@ -438,7 +448,7 @@ func (d *desktop) selectPage(page int) {
 		visible bool
 		ids     []int
 	}{
-		{page == pageHome, []int{idState, idConnect, idSystem, idBrowser, idCountryLabel, idCountry, idRefresh, idCountryApply, idCheckExit, idReconnect, idCountryStatus, idExitIP, idExitCaption, idChosenExit, idDownloadLabel, idDownload, idUploadLabel, idUpload, idTrafficLabel, idTrafficTotal}},
+		{page == pageHome, []int{idState, idConnect, idSystem, idBrowser, idCountryLabel, idCountry, idRefresh, idCountryApply, idCheckExit, idReconnect, idCountryStatus, idSpeedMode, idExitIP, idExitCaption, idChosenExit, idDownloadLabel, idDownload, idUploadLabel, idUpload, idTrafficLabel, idTrafficTotal}},
 		{page == pageRules, []int{idAdvanced, idBuiltins}},
 		{page == pageRules && d.advanced && !d.showBuiltins, []int{idHint, idRuleList, idRuleTarget, idAction, idNewRule, idSave, idDelete, idUp, idDown, idTestInput, idTest, idOpenMatchedRule, idRuleStatus, idRuleScope}},
 		{page == pageRules && !d.advanced && !d.showBuiltins, []int{idWebLabel, idWebInput, idWebAdd, idWebList, idWebRemove, idIPLabel, idIPInput, idIPAdd, idIPList, idIPRemove, idDirectStatus}},
@@ -531,16 +541,27 @@ func (d *desktop) command(id, notify int) {
 				if d.systemOn {
 					d.setSystem(false)
 				}
-			} else if d.confirmedExit {
+			} else if d.sdkStatus.connected() && !d.switching {
 				d.setSystem(true)
-			} else {
-				d.requestExit()
 			}
 		}
 	case idBrowser:
 		if d.worker != nil {
 			d.send("browser", "")
 		}
+	case idSpeedMode:
+		enabled := send(d.controls[idSpeedMode], bmGet, 0, 0) == 1
+		if err := saveSpeedPreference(d.root, enabled); err != nil {
+			if d.speedMode {
+				send(d.controls[idSpeedMode], bmSet, 1, 0)
+			} else {
+				send(d.controls[idSpeedMode], bmSet, 0, 0)
+			}
+			d.alert("无法保存速度模式，请检查运行日志。")
+			log.Print("保存速度模式失败。")
+			return
+		}
+		d.speedMode = enabled
 	case idRefresh:
 		d.refreshCountries()
 	case idCountryApply:
@@ -548,7 +569,7 @@ func (d *desktop) command(id, notify int) {
 	case idCheckExit:
 		d.requestExit()
 	case idReconnect:
-		if d.ready && !d.stopping && !d.probing && !d.switching && d.send("reconnect", d.wanted.ID) {
+		if d.ready && !d.stopping && !d.switching && d.send("reconnect", d.wanted.ID) {
 			d.switching = true
 			setText(d.controls[idCountryStatus], "正在重连 "+displayExit(d.wanted)+"…")
 			d.updateButtons()
@@ -638,10 +659,33 @@ func (d *desktop) handle(event desktopEvent) {
 		if !d.stopping {
 			d.ready = true
 			d.showConnectionState()
-			d.requestExit()
+		}
+	case "speed-fallback":
+		setText(d.controls[idCountryStatus], "速度优先连接失败，已切回自动模式。")
+	case "speed-fallback-error":
+		setText(d.controls[idCountryStatus], "速度模式连接失败，切换自动模式也失败，请查看日志。")
+	case "sdk-status":
+		if event.SDK != nil && !d.stopping {
+			wasConnected := d.sdkStatus.connected()
+			d.sdkStatus = *event.SDK
+			d.showConnectionState()
+			if d.sdkStatus.connected() && !d.switching {
+				d.enableRequestedSystemProxy()
+				if !wasConnected {
+					d.requestExit()
+				}
+			} else if wasConnected {
+				d.exitCurrent = false
+				d.showExit()
+			}
 		}
 	case "system-on", "system-off":
 		d.systemOn, d.systemBusy = event.Kind == "system-on", false
+		if d.ready && !d.stopping {
+			d.showConnectionState()
+		}
+	case "system-wait":
+		d.systemBusy = false
 		if d.ready && !d.stopping {
 			d.showConnectionState()
 		}
@@ -655,37 +699,32 @@ func (d *desktop) handle(event desktopEvent) {
 		if event.Kind == "location" {
 			setText(d.controls[idCountryStatus], "正在验证 "+displayExit(d.wanted)+" 的出口。")
 			d.exit = exitObservation{}
-			d.exitVerifiedAt = time.Time{}
-			d.probeFailures = 0
-			d.confirmedExit = false
+			d.exitVerifiedAt, d.lastExitProbe = time.Time{}, time.Time{}
+			d.exitProbeFailed, d.exitCurrent, d.probing = false, false, false
+			d.sdkStatus = sdkConnectionStatus{}
 			d.showConnectionState()
 			d.showExit()
-			d.requestExit()
 		} else {
 			setText(d.controls[idCountryStatus], event.Value)
+			d.enableRequestedSystemProxy()
 		}
 	case "probe", "probe-error":
 		d.probing = false
-		if !d.stopping {
+		if !d.stopping && !d.switching {
 			if event.Exit != nil {
 				d.exit = *event.Exit
 				d.exitVerifiedAt = time.Now()
-				d.probeFailures = 0
-				d.confirmedExit = true
+				d.exitProbeFailed = false
+				d.exitCurrent = d.sdkStatus.connected()
 				if strings.HasPrefix(getText(d.controls[idCountryStatus]), "正在验证 ") {
 					setText(d.controls[idCountryStatus], "已完成出口检测。")
-				}
-				if !d.systemOn && !d.systemBusy && send(d.controls[idSystem], bmGet, 0, 0) == 1 {
-					d.setSystem(true)
 				}
 				if d.wanted.Code != "" && d.exit.Country != "" && d.wanted.Code != d.exit.Country {
 					log.Printf("出口地区与所选地区不同：选择 %s，检测 %s。", d.wanted.Code, d.exit.Country)
 				}
 			} else {
-				d.probeFailures++
-				d.confirmedExit = false
+				d.exitProbeFailed, d.exitCurrent = true, false
 			}
-			d.showConnectionState()
 			d.showExit()
 		}
 	case "traffic":
@@ -709,8 +748,8 @@ func (d *desktop) handle(event desktopEvent) {
 		d.ready, d.stopping, d.systemBusy, d.systemOn, d.probing, d.switching = false, false, false, false, false, false
 		d.exit = exitObservation{}
 		d.exitVerifiedAt, d.lastExitProbe = time.Time{}, time.Time{}
-		d.probeFailures = 0
-		d.confirmedExit = false
+		d.exitProbeFailed, d.exitCurrent = false, false
+		d.sdkStatus = sdkConnectionStatus{}
 		d.traffic = trafficSample{}
 		d.history = [60]trafficSample{}
 		d.showExit()
@@ -731,26 +770,28 @@ func (d *desktop) handle(event desktopEvent) {
 }
 
 func (d *desktop) requestExit() {
-	if d.ready && !d.probing && !d.stopping && d.send("probe", "") {
+	if d.ready && d.sdkStatus.connected() && !d.probing && !d.stopping && !d.switching && d.send("probe", "") {
 		d.lastExitProbe = time.Now()
 		d.probing = true
 		if d.exit.IP == "" {
 			setText(d.controls[idExitIP], "正在检测…")
 		}
-		d.showConnectionState()
 		d.updateButtons()
 	}
 }
 
+func (d *desktop) enableRequestedSystemProxy() {
+	if d.sdkStatus.connected() && !d.stopping && !d.systemOn && !d.systemBusy && send(d.controls[idSystem], bmGet, 0, 0) == 1 {
+		d.setSystem(true)
+	}
+}
+
 func (d *desktop) showConnectionState() {
-	text := "本地代理已启动，正在检测出口"
-	if d.confirmedExit {
-		text = "代理出口已连通"
-	} else if d.probeFailures > 0 {
-		text = "出口检测暂未通过"
-		if d.probeFailures > 1 {
-			text = fmt.Sprintf("出口连续 %d 次检测未通过", d.probeFailures)
-		}
+	text := "正在连接 URnetwork 节点"
+	if d.sdkStatus.connected() {
+		text = "URnetwork 节点已连接"
+	} else if d.sdkStatus.State == "CONNECT_FAILED" {
+		text = "暂未连到节点，可点击重新连接"
 	}
 	if d.systemOn {
 		text += "   ·   系统代理开启"
@@ -761,7 +802,7 @@ func (d *desktop) showConnectionState() {
 func (d *desktop) showExit() {
 	if d.exit.IP == "" {
 		text := "—"
-		if d.probeFailures > 0 {
+		if d.exitProbeFailed {
 			text = "暂未检测到"
 		}
 		setText(d.controls[idExitIP], text)
@@ -778,7 +819,7 @@ func (d *desktop) showExit() {
 	if d.wanted.Code != "" && d.exit.Country != "" && d.wanted.Code != d.exit.Country {
 		caption += "（与所选地区不同）"
 	}
-	if !d.confirmedExit {
+	if !d.exitCurrent {
 		caption = "上次成功 " + d.exitVerifiedAt.Format("15:04:05") + " · " + caption
 	}
 	setText(d.controls[idExitCaption], caption)
@@ -827,17 +868,18 @@ func (d *desktop) updateButtons() {
 	enable(d.controls[idConnect], !d.stopping)
 	enable(d.controls[idSystem], (d.worker == nil || d.ready) && !d.stopping && !d.systemBusy)
 	enable(d.controls[idBrowser], d.ready && !d.stopping)
-	enable(d.controls[idRefresh], !d.refreshing && !d.switching && !d.probing)
-	enable(d.controls[idCountry], !d.switching && !d.stopping && !d.probing)
-	enable(d.controls[idCountryApply], !d.switching && !d.stopping && !d.probing && (d.worker == nil || d.ready))
-	enable(d.controls[idCheckExit], d.ready && !d.stopping && !d.probing && !d.switching)
-	enable(d.controls[idReconnect], d.ready && !d.stopping && !d.probing && !d.switching)
+	enable(d.controls[idRefresh], !d.refreshing && !d.switching)
+	enable(d.controls[idCountry], !d.switching && !d.stopping)
+	enable(d.controls[idCountryApply], !d.switching && !d.stopping && (d.worker == nil || d.ready))
+	enable(d.controls[idSpeedMode], d.worker == nil && !d.stopping)
+	enable(d.controls[idCheckExit], d.ready && d.sdkStatus.connected() && !d.stopping && !d.probing && !d.switching)
+	enable(d.controls[idReconnect], d.ready && !d.stopping && !d.switching)
 	d.updatePortControls()
 }
 
 func (d *desktop) connect() {
 	d.errorShown = false
-	worker, err := startWorker(d.wanted.ID, func(event workerEvent) { d.post(desktopEvent{workerEvent: event}) })
+	worker, err := startWorker(d.wanted.ID, d.speedMode, func(event workerEvent) { d.post(desktopEvent{workerEvent: event}) })
 	if err != nil {
 		messageBox("启动代理："+err.Error(), 0x10)
 		return

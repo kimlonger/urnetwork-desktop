@@ -16,7 +16,7 @@ import (
 	"unsafe"
 )
 
-const appVersion = "0.6.2"
+const appVersion = "0.6.6"
 
 var logFile *os.File
 

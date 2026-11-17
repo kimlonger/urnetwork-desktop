@@ -1,10 +1,10 @@
 # URnetwork 桌面代理
 
-面向 Windows 10/11 x64 的便携代理客户端，使用 URnetwork SDK 连接出口。支持国家选择、上传和下载速率、网站和地址网段分流。只监听本机，运行时禁用流量共享和贡献中继。
+面向 Windows 10/11 x64 的便携代理客户端，使用 URnetwork SDK 连接出口。支持国家选择、速度优先模式、上传和下载速率、网站和地址网段分流。只监听本机，运行时禁用流量共享和贡献中继。
 
 ## 使用
 
-从[发布页](https://github.com/kimlonger/urnetwork-desktop/releases/latest)下载 Windows x64 版 EXE，直接双击。已有访客身份和分流设置会继续使用。具体用法见[使用说明](README-Start.md)。
+当前源码版本为 v0.6.6。GitHub [发布页](https://github.com/kimlonger/urnetwork-desktop/releases/latest)目前提供的是 v0.6.2；v0.6.6 可按下方说明从源码构建。构建后的 Windows x64 版 EXE 可以直接双击，已有访客身份和分流设置会继续使用。具体用法见[使用说明](README-Start.md)。
 
 ## 构建
 
@@ -22,5 +22,5 @@
 
 ## 第三方组件
 
-- 本仓库附带 URnetwork 官方 Windows SDK `2026.10.27-1083160450` 的原版 x64 DLL。SDK 及其依赖的许可见 [SDK-Licenses.json](SDK-Licenses.json)，对应源码版本为 [SDK](https://github.com/urnetwork/sdk/tree/v2026.10.27-1083160450) 和 [Connect](https://github.com/urnetwork/connect/tree/v2026.10.27-1083160450)。官方 SDK 下载见[上游发布页](https://github.com/urnetwork/build/releases/tag/v2026.10.27-1083160450)。
+- 本仓库附带 URnetwork 官方 Windows SDK `2026.11.16-1100716180` 的原版 x64 DLL。SDK 及其依赖的许可见 [SDK-Licenses.json](SDK-Licenses.json)，对应源码版本为 [SDK](https://github.com/urnetwork/sdk/tree/7e4e407d2b54fb55ac13a02a919bf8217717b810) 和 [Connect](https://github.com/urnetwork/connect/tree/57a0909af0402d959cb02b095c58202fa192399a)。官方 SDK 下载见[上游发布页](https://github.com/urnetwork/build/releases/tag/v2026.11.16-1100716180)。
 - 国内域名和网段从 [MetaCubeX 规则库](https://github.com/MetaCubeX/meta-rules-dat) 提取为可编辑的 `cn-domain.list` 和 `cn-ip.list`，随附[规则数据许可](CN-rule-lists-LICENSE.txt)。

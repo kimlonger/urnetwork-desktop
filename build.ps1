@@ -1,7 +1,10 @@
-[CmdletBinding()]
-param([string]$OutputDirectory = (Join-Path $PSScriptRoot 'dist'))
+﻿[CmdletBinding()]
+param([string]$OutputDirectory)
 
 $ErrorActionPreference = 'Stop'
+if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
+    $OutputDirectory = Join-Path $PSScriptRoot 'dist'
+}
 Push-Location -LiteralPath $PSScriptRoot
 try {
     $target = (& go env GOOS GOARCH) -join '/'
@@ -10,7 +13,7 @@ try {
     }
 
     $sdkPath = Join-Path $PSScriptRoot 'URnetworkSdk.dll'
-    $sdkHash = '53BF159133483B8EEC79278893246E91ABFA9E297636A7475B92DC5D420338E7'
+    $sdkHash = '30BFEFB30AF5DB1D0BC3C141FE41BA5136CD2489737921925282C09CFED7523C'
     if ((Get-FileHash -LiteralPath $sdkPath -Algorithm SHA256).Hash -ne $sdkHash) {
         throw 'SDK 文件与此版本固定的官方 DLL 不一致。'
     }

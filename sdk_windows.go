@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -18,13 +19,15 @@ import (
 )
 
 type sdk struct {
-	procs      map[string]*syscall.Proc
-	manager    uintptr
-	space      uintptr
-	api        uintptr
-	device     uintptr
-	refreshSub uintptr
-	memory     sdkMemoryBudget
+	procs             map[string]*syscall.Proc
+	manager           uintptr
+	space             uintptr
+	api               uintptr
+	device            uintptr
+	refreshSub        uintptr
+	memory            sdkMemoryBudget
+	egress            sdkEgress
+	egressInitialized bool
 }
 
 const mebibyte = 1024 * 1024
@@ -93,13 +96,18 @@ func loadSDK(path string) (*sdk, error) {
 	lib := &syscall.DLL{Name: path, Handle: syscall.Handle(handle)}
 	s := &sdk{procs: make(map[string]*syscall.Proc)}
 	for _, name := range strings.Fields(`
-		free_string release new_id new_network_space_manager_no_storage
+		free_string release new_id new_network_space_manager
 		network_space_manager_update_network_space_values network_space_manager_close
 		network_space_get_api api_set_by_jwt get_licenses
 		set_memory_limit new_device_local device_local_set_connect_location_checked device_local_reconnect_checked device_get_route_local
 		device_get_provide_enabled device_get_provide_mode device_get_provide_extender device_local_get_memory_stats
 		device_close device_add_jwt_refresh_listener sub_close device_dial conn_read conn_write conn_close
-		conn_close_write conn_set_deadline conn_set_read_deadline conn_set_write_deadline`) {
+		device_set_performance_profile device_get_performance_profile
+		conn_close_write conn_set_deadline conn_set_read_deadline conn_set_write_deadline
+		device_local_open_connect_view_controller device_local_close_connect_view_controller
+		set_egress_interface_index device_local_network_changed
+		connect_view_controller_start connect_view_controller_get_connection_status
+		connect_view_controller_get_grid connect_grid_get_window_current_size`) {
 		proc, err := lib.FindProc("urnet_" + name)
 		if err != nil {
 			_ = lib.Release()
@@ -108,6 +116,29 @@ func loadSDK(path string) (*sdk, error) {
 		s.procs[name] = proc
 	}
 	return s, nil
+}
+
+type sdkConnectionStatus struct {
+	State     string
+	Providers int64
+}
+
+func (status sdkConnectionStatus) connected() bool {
+	return status.State == "CONNECTED" && status.Providers > 0
+}
+
+func (s *sdk) connectionStatus(controller uintptr) sdkConnectionStatus {
+	ptr := s.call("connect_view_controller_get_connection_status", controller)
+	status := sdkConnectionStatus{State: copyCString(ptr)}
+	if ptr != 0 {
+		s.call("free_string", ptr)
+	}
+	grid := s.call("connect_view_controller_get_grid", controller)
+	if grid != 0 {
+		status.Providers = int64(s.call("connect_grid_get_window_current_size", grid))
+		s.call("release", grid)
+	}
+	return status
 }
 
 //go:uintptrescapes
@@ -136,11 +167,19 @@ func copyCString(ptr uintptr) string {
 	return string(data)
 }
 
-func (s *sdk) init() error {
+func (s *sdk) init(storageDir string) error {
+	if storageDir != "" {
+		if err := os.MkdirAll(storageDir, 0700); err != nil {
+			return fmt.Errorf("创建 SDK 缓存目录：%w", err)
+		}
+	}
 	s.memory = windowsSDKMemoryBudget(hostPhysicalMemory())
 	s.call("set_memory_limit", uintptr(s.memory.process))
 	log.Printf("SDK 内存预算：设备 %d MiB，进程 %d MiB。", s.memory.device/mebibyte, s.memory.process/mebibyte)
-	s.manager = s.call("new_network_space_manager_no_storage")
+	s.refreshEgress()
+	storage := cString(storageDir)
+	s.manager = s.call("new_network_space_manager", uintptr(unsafe.Pointer(&storage[0])))
+	runtime.KeepAlive(storage)
 	if s.manager == 0 {
 		return errors.New("could not initialize URnetwork SDK")
 	}
@@ -155,6 +194,9 @@ func (s *sdk) init() error {
 	s.api = s.call("network_space_get_api", s.space)
 	if s.api == 0 {
 		return errors.New("could not initialize URnetwork API")
+	}
+	if storageDir != "" {
+		log.Print("SDK 已启用本地中继目录缓存。")
 	}
 	return nil
 }

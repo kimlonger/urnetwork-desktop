@@ -61,6 +61,7 @@ func run() error {
 	dllPath := flag.String("sdk", filepath.Join(assets, "URnetworkSdk.dll"), "path to the bundled SDK DLL")
 	locationID := flag.String("location-id", "", "optional URnetwork location UUID")
 	providerID := flag.String("provider-id", "", "optional URnetwork provider client UUID")
+	speedProfile := flag.Bool("performance-speed", false, "prefer a single speed-oriented URnetwork exit")
 	noUR := flag.Bool("offline", false, "test local rules with URnetwork routes returning an error")
 	checkSDK := flag.Bool("check-sdk", false, "check SDK exports and initialize a separate in-memory network space, then exit")
 	checkAPI := flag.Bool("check-api", false, "check the public URnetwork HTTPS endpoint without creating an account")
@@ -122,7 +123,7 @@ func run() error {
 			return err
 		}
 		defer s.close()
-		if err := s.init(); err != nil {
+		if err := s.init(""); err != nil {
 			return err
 		}
 		if !validID(s.newID()) {
@@ -196,10 +197,18 @@ func run() error {
 			return err
 		}
 		log.Print("设备授权已就绪，正在初始化 URnetwork。")
-		if err := s.init(); err != nil {
+		if err := s.init(filepath.Join(root, "sdk-storage")); err != nil {
 			return err
 		}
 		if err := s.start(state.JWT, state.Instance, *locationID, *providerID); err != nil {
+			return err
+		}
+		if *speedProfile {
+			if err := s.useSpeedProfile(); err != nil {
+				return err
+			}
+			log.Print("已启用速度优先模式（单出口）；匿名中继保持开启。")
+		} else if err := s.useAutoProfile(); err != nil {
 			return err
 		}
 		log.Print("已请求 URnetwork 连接，首次访问外网时可能需要等待节点建立连接。")
@@ -265,10 +274,28 @@ func run() error {
 		if listeners["auto"] == nil {
 			return errors.New("桌面版需要 auto 分流端口")
 		}
+		var controller uintptr
+		if connection != nil {
+			controller = connection.call("device_local_open_connect_view_controller", connection.device)
+			if controller == 0 {
+				return errors.New("无法读取 URnetwork 节点状态")
+			}
+			defer connection.call("release", controller)
+			defer connection.call("device_local_close_connect_view_controller", connection.device, controller)
+			connection.call("connect_view_controller_start", controller)
+		}
 		address := listeners["auto"].Addr().String()
 		sendWorkerEvent(workerEvent{Kind: "ready", Value: address})
 		go reportTraffic(ctx, &traffic)
-		go readWorkerCommands(ctx, cancel, bufio.NewScanner(os.Stdin), connection, &active, address)
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			runWorker(ctx, cancel, bufio.NewScanner(os.Stdin), connection, controller, &active, address, *speedProfile)
+		}()
+		defer func() {
+			cancel()
+			<-done
+		}()
 	}
 	<-ctx.Done()
 	log.Print("正在退出代理。")

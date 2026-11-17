@@ -220,7 +220,7 @@ func (d *desktop) colorControl(dc, hwnd uintptr) uintptr {
 	case idUpload:
 		color = uploadInk
 	case idState:
-		if d.ready && d.confirmedExit {
+		if d.ready && d.sdkStatus.connected() {
 			color = 0x675a07
 		} else if d.ready {
 			color = blueInk
