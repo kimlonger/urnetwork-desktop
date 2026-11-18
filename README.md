@@ -4,7 +4,7 @@
 
 ## 使用
 
-当前源码版本为 v0.6.6。GitHub [发布页](https://github.com/kimlonger/urnetwork-desktop/releases/latest)目前提供的是 v0.6.2；v0.6.6 可按下方说明从源码构建。构建后的 Windows x64 版 EXE 可以直接双击，已有访客身份和分流设置会继续使用。具体用法见[使用说明](README-Start.md)。
+当前源码版本为 v0.6.6。从 [GitHub 发布页](https://github.com/kimlonger/urnetwork-desktop/releases/latest)下载 Windows x64 版 EXE，或按下方说明从源码构建。EXE 可以直接双击，已有访客身份和分流设置会继续使用。具体用法见[使用说明](README-Start.md)。
 
 ## 构建
 
